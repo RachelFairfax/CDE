@@ -1,127 +1,209 @@
 #Import required modules and advise user to retry if fails
 try:
     import socket
-    import threading
     import json
+    import threading
     import tkinter as tk
+    import base64
+    import os
     from tkinter import scrolledtext
     from datetime import datetime
+    from tkinter import filedialog
+    from tkinter import INSERT
+    from tkinter import ttk
 except ImportError:
-    raise ImportError("Failed to start, close and retry")
+    raise ImportError('Failed to start, close and retry')
 
-#Connect to the chat server
-#Accept customer IP and Port or default to IP 127.0.0.1 and port 8888
-def connect_to_server(host='127.0.0.1',port=8888):
+#Connect to chat server - accept custom IP or pass in default
+def connect_to_server(host='127.0.0.1', port=8888):
     global client_socket
-    #Create a dictionary set of socket data using the socket library
-    client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    #Connect to the server using the library functionality and set server / port
-    client_socket.connect((host,port))
+    #Create socket data dictionary set using socket library
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #Connect to server using library and set server or port
+    client_socket.connect((host, port))
     return client_socket
 
-#Function to set the user's name
+#Disables name input and sends username to server
 def set_name():
-    #Create a global app variable and get it from the input
+    #Create global application variable and fetch from name input
     name = name_entry.get()
-    #Disable the name input and remove submit button
-    name_entry.config(state="disabled")
-    name_button.pack_forget()
-    #Format the name data and send it 
-    client_socket.send(name.encode())
-    timestamp = datetime.now().strftime("%H:%M:%S") # Format timestamp to hour:min:sec
-    #Update the message screen
-    message_display.delete("end")
-    message_display.insert("end", f"[{timestamp}] Welcome to the chat {name}\n","system")
-    message_display.see("end")
-    window.update()
+    #Checks that a name was entered when the button is pushed - if not it notifies the user
+    if name != "":
+        #Disable name input and remove submit button
+        name_entry.config(state = 'disabled')
+        message_entry.config(state = 'active')
+        name_button.pack_forget()
+        #Format name data and send
+        client_socket.send(name.encode())
+        timestamp = datetime.now().strftime('%H:%M:%S')#Format timestamp to Hour:Minute:Second
+        #Update message screen
+        message_display.delete('end')
+        message_display.insert('end', f'[{timestamp}] Welcome to the chat {name}\n', 'system')
+        message_display.see('end')
+        window.update()
+    else:
+        print("Name was not entered")
+        timestamp = datetime.now().strftime('%H:%M:%S')#Format timestamp to Hour:Minute:Second
+        message_display.insert("end", f'[{timestamp}] SYSTEM: Name was not entered\n', 'system')
+        window.update()
 
+#Continuously receive and display messages from server
 def receive_messages():
-    #Continuous loop
+    #Continuous Loop
     while True:
         #Assign data dictionary based on received data
         data = client_socket.recv(1024)
-        #if no data received, break out of function
+        #If no data received, break out of function
         if not data:
+            print("No data")
             break
-        #Decode the JSON message
+        #Decode JSON message
         message = json.loads(data.decode())
+        try:
+            print(message)
+            #Checks if message contains a file
+            if 'file' in message:
+                file_data = base64.b64decode(message['file']).decode('utf-8')
+                print(file_data)
+                print(os.path.dirname(__file__))
+                file = open(os.path.dirname(__file__) + '/' + message['file_name'], 'w')
+                file.write(file_data)
+                file.close()
+        except Exception as e:
+            print('No File: ' + str(e))
 
-        #Update the message screen
-        message_display.insert("end",f"[{message['timestamp']}] {message['name']} : (message['text'])\n")
-        message_display.see("end")
+        #Update message screen
+        message_display.insert("end", f"[{message['timestamp']}] {message['name']}: {message['text']}\n", "receiver")
+        message_display.see('end')
         window.update()
 
+def import_file():
+    global file_path
+    file_path = filedialog.askopenfilename(title = 'Select a file', filetypes = [('All files', '*.*')])
+    if file_path:
+        #Process selected file
+        print("Selected file:", file_path)
+        file = open(file_path, 'rb')
+        print(file)
+        message = {'text': 'Sent a file', 'file_name': file_path.split('/')[-1], 'file': base64.b64encode(file.read()).decode('utf-')}
+        file.close()
+        client_socket.send(json.dumps(message).encode())
+        #Create timestamp
+        timestamp = datetime.now().strftime('%H:%M:%S')#Format timestamp to Hour:Minute:Seconds
+        #Update message screen
+        message_display.insert("end", f"[{timestamp}] You: {message["text"]}\n", "sender")
+        message_display.see('end')
+        message_entry.delete(0, 'end')
+        window.update()
+
+#Sends message to server, displays sent message in client chat window
 def send_message():
-    message_text = message_entry.get() #Get message on click
-    if message_text: # Checks if a message text exists
-        message = {"text": message_text}
-        #Send the message encoded in JSON format
-        client_socket.send(json.dumps(message).emcode())
-        #Create a timestamp
-        timestamp = datetime.now().strftime("%H:%M:%S") # Format timestamp to hour:min:sec
-        #Update the message screen
-        message_display.insert("end",f"[{timestamp}] You: {message['text']}\n","sender")
-        message_display.see("end")
-        message_entry.delete(0,"end")
+    message_text = message_entry.get()#Get message on click
+    if message_text: #Checks if message text exists
+        message = {'text': message_text}
+        #Send message encoded in JSON format
+        client_socket.send(json.dumps(message).encode())
+        #Create timestamp
+        timestamp = datetime.now().strftime('%H:%M:%S')#Format timestamp to Hour:Minute:Seconds
+        #Update message screen
+        message_display.insert("end", f"[{timestamp}] You: {message_text}\n", "sender")
+        message_display.see('end')
+        message_entry.delete(0, 'end')
         window.update()
 
-def create_windows():
-    #Create a tkinter window
+#Create GUI for client, declares container to store window in and create objects inside window
+def create_window():
+    #Create tkinter window
     global window
-    global name_entry,name_button,message_display,message_entry
+    global name_entry, name_button, message_display, message_entry
     window = tk.Tk()
-    window.title("Chat Client")
+    window.title('Chat Client')
 
-    #Create a frame for name input
+    #Create frame for name input
     name_frame = tk.Frame(window)
-    name_frame.pack(fill="x")
+    name_frame.pack(fill = 'x')
 
-    name_label = tk.Label(name_frame,text="Enter your name:")
-    name_label.pack(side="left")
+    name_label = tk.Label(name_frame, text = 'Enter your Name:')
+    name_label.pack(side = 'left')
 
     name_entry = tk.Entry(name_frame)
-    name_entry.pack(side="left")
+    name_entry.pack(side = 'left')
 
-    name_button = tk.Button(name_frame,text="Set Name",command=set_name)
-    name_button.pack(side="left")
+    name_button = tk.Button(name_frame, text = 'Set Name', command = set_name)
+    name_button.pack(side = 'left')
 
-    #Create a scrolled text widget to display messages
-    message_display = scrolledtext.ScrolledText(window, wrap=tk.WORD)
-    message_display.tag_config('sender',foreground="#228B22")
-    message_display.tag_config('sender',foreground="#FF5733")
-    message_display.pack(fill="both",expand=True)
+    #Create Quit button
+    quit_button = tk.Button(name_frame, text = 'Quit', command = quit_program)
+    quit_button.pack(side = 'right')
 
-    #Create an entry widget for typing messages
-    send_button = tk.Button(window,text="Send",command=send_message)
-    send_button.pack()
+    #Create scrolled text widget to display messages
+    message_display = scrolledtext.ScrolledText(window, wrap = tk.WORD)
+    message_display.tag_config('sender', foreground = '#228B22')
+    message_display.tag_config('system', foreground = '#FF5733')
+    message_display.pack(fill = 'both', expand = True)
 
-    #Set the initial state of name entry and button
-    name = ""
-    name_entry.config(state="normal")
-    name_button.config(state="normal")
 
+    message_frame = tk.Frame(window)
+    message_frame.pack(fill = 'x')
+    
+    #Create entry widget for typing messages
+    message_entry = ttk.Entry(message_frame, width=100)
+    message_entry.config(state = 'disabled')
+    message_entry.insert(INSERT, 'Enter Your Message')
+    message_entry.pack(side = 'left')
+
+    #Create send button to send messages
+    send_button = tk.Button(message_frame, text = 'Send', command = send_message)
+    send_button.pack(side = 'right')
+
+    #Create upload file button to upload file
+    import_button = tk.Button(message_frame, text = 'Upload File', command = import_file)
+    import_button.pack(side = 'right')
+
+    #Set initial state of name entry and button
+    name = ''
+    name_entry.config(state = 'normal')
+    name_button.config(state = 'normal')
+
+#Starts daemon thread to start separate thread for receiving messages - keep main GUI responsive
 def start_daemon_thread():
     global message_thread
-    message_thread = threading.Thread(target=receive_messages)
+    message_thread = threading.Thread(target = receive_messages)
     message_thread.daemon = True
     message_thread.start()
     return message_thread
 
+#Quit Program
+def quit_program():
+    name = name_entry.get()
+    message = {'text': name + ' has disconnected from the chat'}
+    client_socket.send(json.dumps(message).encode())
+    #Create timestamp
+    timestamp = datetime.now().strftime('%H:%M:%S')#Format timestamp to Hour:Minute:Seconds
+    #Update message screen
+    message_display.insert('end', f'[{timestamp}] You: {message["text"]}\n', 'sender')
+    message_display.see('end')
+    message_entry.delete(0, 'end')
+    window.update()
+    window.destroy()
+    
+
+#Close client socket when exiting the client application
 def handle_cleanup():
     client_socket.shutdown(socket.SHUT_RDWR)
     client_socket.close()
 
+#Main function to set up client, create GUI, start message receiving thread and run application loop
 def main():
     try:
         connect_to_server()
-        create_windows()
+        create_window()
         start_daemon_thread()
-        #Loop the program until exit
-
+        #Loop program until exit
         while True:
             window.mainloop()
     finally:
         handle_cleanup()
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
