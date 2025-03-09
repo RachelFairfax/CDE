@@ -66,6 +66,12 @@ def create_socket_bind(host = '0.0.0.0', port = 8888):
 
 #Cleans up server socket when server closed
 def handle_cleanup():
+    with clients_lock:
+        for client in clients:
+            try:
+                client.close()
+            except Exception as e:
+                logging.warning(f"Error closing client connection: {e}")
     server_socket.shutdown(socket.SHUT_RDWR)
     server_socket.close()
 

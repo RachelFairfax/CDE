@@ -198,12 +198,15 @@ def main():
     try:
         connect_to_server()
         create_window()
+        create_window()
         start_daemon_thread()
         #Loop program until exit
         while True:
             window.mainloop()
     finally:
-        handle_cleanup()
+        if client_socket:
+            client_socket.close()
 
+if __name__ == '__main__':
 if __name__ == '__main__':
     main()
