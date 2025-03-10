@@ -8,6 +8,8 @@ except ImportError:
     raise ImportError('Failed to start, close and retry')
 
 ALLOWED_IPS = ['127.0.0.1', '192.168.1.100']  # Add allowed client IPs
+MAX_CONNECTIONS_PER_IP = 2  # Maximum number of connections allowed per IP
+client_connections = {}  # Dictionary to track connections per IP
 
 #Handles chat client connection - responsible for receiving and sending messages to and from clients. Tracks client name and broadcasts messages to all connected clients
 def handle_client(client_socket, address):
@@ -100,6 +102,15 @@ def create_socket_bind(host='0.0.0.0', port=8888):
             print(f"Unauthorized connection attempt from {client_ip}")
             client_socket.close()
             continue  # Ignore unauthorized connections
+
+        # Count connections from this IP
+        client_connections[client_ip] = client_connections.get(client_ip, 0) + 1
+
+        if client_connections[client_ip] > MAX_CONNECTIONS_PER_IP:
+            print(f"Too many connections from {client_ip}, rejecting.")
+            client_socket.close()
+            client_connections[client_ip] -= 1  # Reduce count
+            continue
 
         clients.append(client_socket)
         threading.Thread(target=handle_client, args=(client_socket, client_address), daemon=True).start()
