@@ -11,34 +11,60 @@ ALLOWED_IPS = ['127.0.0.1', '192.168.1.100']  # Add allowed client IPs
 
 #Handles chat client connection - responsible for receiving and sending messages to and from clients. Tracks client name and broadcasts messages to all connected clients
 def handle_client(client_socket, address):
-    print(f"Accepted connection from {address}")
-    #Get client name
-    timestamp = datetime.now().strftime('%H:%M:%S')#Format timestamp to Hour:Minute:Second
-    client_name = client_socket.recv(1024).decode()
-    broadcastData = {'timestamp': timestamp, 'name': 'SERVER', 'text': client_name + ' has joined the chat'}
-    broadcast(broadcastData, server_socket)
-    print(f"{client_name} has joined the chat")
+    try:
+        print(f"Accepted connection from {address}")
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        client_name = client_socket.recv(1024).decode().strip()
 
-    #Create message handle loop
-    while True:
-        data = client_socket.recv(1024) #Assign JSON data to variable
-        #If no data received - client disconnected
-        if not data:
-            print(f"{client_name} disconnected")
-            break
+        if not client_name or len(client_name) > 30:
+            print(f"Invalid name received from {address}. Disconnecting...")
+            client_socket.close()
+            return
 
-        #Decode JSON message
-        message = json.loads(data.decode())#Load messages from clients from JSON data
-        timestamp = datetime.now().strftime('%H:%M:%S')#Format datetime to be Hour:Minute:Second
-        message['timestamp'] = timestamp
-        message['name'] = client_name
-        print(message)
+        broadcastData = {'timestamp': timestamp, 'name': 'SERVER', 'text': f"{client_name} has joined the chat"}
+        broadcast(broadcastData, server_socket)
 
-        #Debugging to display received message with timestamp and sender name
-        print(f"(Debugging) {timestamp} - {client_name}: {message['text']}")
+        while True:
+            try:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
 
-        #Broadcast message to all connected clients
-        broadcast(message, client_socket)
+                message = json.loads(data.decode())
+
+                # Validate message structure
+                if not isinstance(message, dict) or 'text' not in message:
+                    print(f"Invalid message format from {client_name}, ignoring.")
+                    continue
+                
+                # Limit message length (avoid spam attacks)
+                if len(message['text']) > 500:
+                    print(f"Message too long from {client_name}, ignoring.")
+                    continue
+
+                # Remove any harmful characters (basic input sanitation)
+                message['text'] = message['text'].replace("<script>", "").replace("</script>", "")
+
+                # Append timestamp and sender name
+                message['timestamp'] = datetime.now().strftime('%H:%M:%S')
+                message['name'] = client_name
+
+                print(f"(Debugging) {message['timestamp']} - {client_name}: {message['text']}")
+
+                broadcast(message, client_socket)
+
+            except (json.JSONDecodeError, ValueError):
+                print(f"Malformed message from {client_name}, ignoring.")
+                continue
+
+    except Exception as e:
+        print(f"Error handling client {address}: {e}")
+    finally:
+        print(f"{client_name} disconnected")
+        clients.remove(client_socket) if client_socket in clients else None
+        client_socket.close()
+
+
 
 #Broadcasts message to all connected clients except sender
 def broadcast(message, sender_socket):
