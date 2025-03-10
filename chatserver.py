@@ -7,6 +7,8 @@ try:
 except ImportError:
     raise ImportError('Failed to start, close and retry')
 
+ALLOWED_IPS = ['127.0.0.1', '192.168.1.100']  # Add allowed client IPs
+
 #Handles chat client connection - responsible for receiving and sending messages to and from clients. Tracks client name and broadcasts messages to all connected clients
 def handle_client(client_socket, address):
     print(f"Accepted connection from {address}")
@@ -19,7 +21,7 @@ def handle_client(client_socket, address):
 
     #Create message handle loop
     while True:
-        data = client_socket.recv(1024)#Assign JSON data to variable
+        data = client_socket.recv(1024) #Assign JSON data to variable
         #If no data received - client disconnected
         if not data:
             print(f"{client_name} disconnected")
@@ -53,16 +55,28 @@ def broadcast(message, sender_socket):
                 clients.remove(client)
 
 #Creates socket, bind to IP address and port and listen for incoming connections. Initialise empty list clients to store connected client sockets
-def create_socket_bind(host = '0.0.0.0', port = 8888):
+
+
+def create_socket_bind(host='0.0.0.0', port=8888):
     global server_socket
-    #Create dictionary data set of socket data using socket library
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #Create bind connection for clients using library functionality and set server or port
     server_socket.bind((host, port))
-    server_socket.listen(5)#Allow up to five connections
-    print(f'Server is listening on {host}:{port}')
-    global clients#List to store connected client sockets
+    server_socket.listen(5)
+    global clients
     clients = []
+    print(f'Server is listening on {host}:{port}')
+
+    while True:
+        client_socket, client_address = server_socket.accept()
+        client_ip = client_address[0]
+
+        if client_ip not in ALLOWED_IPS:
+            print(f"Unauthorized connection attempt from {client_ip}")
+            client_socket.close()
+            continue  # Ignore unauthorized connections
+
+        clients.append(client_socket)
+        threading.Thread(target=handle_client, args=(client_socket, client_address), daemon=True).start()
 
 #Cleans up server socket when server closed
 def handle_cleanup():
