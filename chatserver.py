@@ -1,86 +1,175 @@
- #Import required modules and advise user to retry if fails
+# Import required modules - advise user retry on fail
 try:
     import socket
     import threading
     import json
+    import logging
     from datetime import datetime
 except ImportError:
-    raise ImportError("Failed to start, close and retry")
+    raise ImportError('Failed to start, close and retry')
 
-#Function to handle client connections
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+ALLOWED_IPS = ['127.0.0.1', '192.168.1.100']  # Add allowed client IPs
+MAX_CONNECTIONS_PER_IP = 2  # Maximum number of connections allowed per IP
+client_connections = {}  # Dictionary to track connections per IP
+
+clients = []  # List to store connected client sockets
+clients_lock = threading.Lock()  # Lock to prevent concurrent modifications
+
+
+# Handles chat client connection - responsible for receiving and sending messages to and from clients.
 def handle_client(client_socket, address):
-    print(f"Accepted connection from (address)")
+    try:
+        logging.info(f"Accepted connection from {address}")
+        client_ip = address[0]
+        
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        client_name = client_socket.recv(1024).decode().strip()
 
-    #Receive the client's name
-    client_name = client_socket.recv(1024).decode()
-    print(f"(client_name) has joined the chat.")
+        if not client_name or len(client_name) > 30:
+            logging.warning(f"Invalid name received from {address}. Disconnecting...")
+            client_socket.close()
+            return
 
-    #Create message handle loop
-    while True:
-        data = client_socket.recv(1024) #Assign JSON data to data variable
+        # Notify all clients about the new user
+        broadcastData = {'timestamp': timestamp, 'name': 'SERVER', 'text': f"{client_name} has joined the chat"}
+        broadcast(broadcastData, client_socket)
 
-        #If no data received, the client has disconnected
-        if not data:
-            print (f"(client_name) disconnected")
-            break
-
-        #Decode the JSON message
-        message = json.loads(data.decode()) #Load message from clients from JSON data
-        timestamp = datetime.now().strftime("%H:%M:%S") #Format timestamp to hour:min:sec
-        #Create dictionary variable for the data / timestamp and senders name.
-        broadcastData = {"timestamp": timestamp, "name": client_name, "text": message ["text"]}
-
-        #Debugging to display the received message with timestamp and sender's name
-        print(f" (Debugging) {timestamp} - {client_name}: {message['text']}")
-
-        #Broadcast the message to all connected clients
-        broadcast(broadcastData,client_socket)
-
-# Function to broadcast a message to all connected clients
-def broadcast(message, sender_socket):
-    # Loop through all connected clients
-    for client in clients:
-        # If client is not the sender
-        if client != sender_socket:
-            # Try to send the message or remove the client
+        while True:
             try:
-                # Encode the message as JSON and send it
-                client.send(json.dumps(message).encode())
-            except:
-                # Remove the client if it's no longer available
-                clients.remove(client)
+                data = client_socket.recv(1024)
+                if not data:
+                    break  # Client disconnected
+                
+                # Process incoming message
+                message = json.loads(data.decode())
 
+                # Validate message structure
+                if not isinstance(message, dict) or 'text' not in message:
+                    logging.warning(f"Invalid message format from {client_name}, ignoring.")
+                    continue
+                
+                # Limit message length (avoid spam attacks)
+                if len(message['text']) > 500:
+                    logging.warning(f"Message too long from {client_name}, ignoring.")
+                    continue
+
+                # Remove any harmful characters (basic input sanitation)
+                message['text'] = message['text'].replace("<script>", "").replace("</script>", "")
+
+                # Append timestamp and sender name
+                message['timestamp'] = datetime.now().strftime('%H:%M:%S')
+                message['name'] = client_name
+
+                logging.info(f"(Debugging) {message['timestamp']} - {client_name}: {message['text']}")
+
+                # Broadcast the message
+                broadcast(message, client_socket)
+
+            except (json.JSONDecodeError, ValueError):
+                logging.warning(f"Malformed message from {client_name}, ignoring.")
+                continue
+
+    except ConnectionResetError:
+        logging.warning(f"Connection lost with {address}")
+
+    except Exception as e:
+        logging.error(f"Error handling client {address}: {e}")
+
+    finally:
+        # Client disconnect cleanup
+        with clients_lock:
+            if client_socket in clients:
+                clients.remove(client_socket)
+
+        # Decrement connection count for this IP
+        client_connections[client_ip] = max(0, client_connections.get(client_ip, 0) - 1)
+
+        client_socket.close()
+        logging.info(f"{client_name} disconnected")
+
+
+# Broadcasts message to all connected clients except sender
+def broadcast(message, sender_socket):
+    with clients_lock:
+        for client in clients:
+            if client != sender_socket:
+                try:
+                    client.send(json.dumps(message).encode())
+                except:
+                    logging.warning("Failed to send message, removing client.")
+                    clients.remove(client)
+
+
+# Creates socket, binds to IP address and port, and listens for incoming connections.
 def create_socket_bind(host='0.0.0.0', port=8888):
     global server_socket
-    # Create a dictionary data set of socket data using the socket library
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Create a bind connection for clients using the library functionality and set server / port
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allows immediate reuse of port after crash
     server_socket.bind((host, port))
-    server_socket.listen(5)  # Allow up to 5 connections
-    print(f"Server is listening on {host}:{port}")
-    global clients  # List to store connected client sockets
-    clients = []
+    server_socket.listen(5)
 
-def handle_cleanup():
-    server_socket.shutdown(socket.SHUT_RDWR)
-    server_socket.close()
+    logging.info(f'Server is listening on {host}:{port}')
 
-def main():
     try:
-        create_socket_bind()
-
-        # Loop the program until exit
         while True:
             client_socket, client_address = server_socket.accept()
-            clients.append(client_socket)  # Add the client socket to the list of connected clients
+            client_ip = client_address[0]
 
-            # Start a new thread to handle the client
-            global client_thread
-            client_thread = threading.Thread(target=handle_client, args=(client_socket, client_address))
-            client_thread.start()
+            # Restrict unauthorized IPs
+            if client_ip not in ALLOWED_IPS:
+                logging.warning(f"Unauthorized connection attempt from {client_ip}")
+                client_socket.close()
+                continue
+
+            # Limit connections per IP
+            client_connections[client_ip] = client_connections.get(client_ip, 0) + 1
+            if client_connections[client_ip] > MAX_CONNECTIONS_PER_IP:
+                logging.warning(f"Too many connections from {client_ip}, rejecting.")
+                client_socket.close()
+                client_connections[client_ip] -= 1  # Reduce count
+                continue
+
+            with clients_lock:
+                clients.append(client_socket)
+
+            threading.Thread(target=handle_client, args=(client_socket, client_address), daemon=True).start()
+
+    except KeyboardInterrupt:
+        logging.info("Shutting down server...")
 
     finally:
         handle_cleanup()
+
+
+# Cleans up server socket when server closes
+def handle_cleanup():
+    logging.info("Cleaning up server resources...")
+    with clients_lock:
+        for client in clients:
+            try:
+                client.close()
+            except Exception as e:
+                logging.warning(f"Error closing client connection: {e}")
+    
+    try:
+        server_socket.shutdown(socket.SHUT_RDWR)
+        server_socket.close()
+    except Exception as e:
+        logging.warning(f"Error closing server socket: {e}")
+
+
+# Calls function to set up server, handle client connections, and cleanup when server closes
+def main():
+    try:
+        create_socket_bind()
+    except Exception as e:
+        logging.error(f"Server encountered an error: {e}")
+    finally:
+        handle_cleanup()
+
 
 if __name__ == '__main__':
     main()
